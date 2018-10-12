@@ -1,0 +1,3 @@
+package library.domain.projections.queries
+
+object FetchAllBooksQuery
