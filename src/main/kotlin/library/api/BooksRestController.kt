@@ -11,9 +11,7 @@ import org.axonframework.commandhandling.model.AggregateNotFoundException
 import org.axonframework.queryhandling.QueryGateway
 import org.axonframework.queryhandling.responsetypes.ResponseType
 import org.axonframework.queryhandling.responsetypes.ResponseTypes
-import org.springframework.hateoas.MediaTypes
-import org.springframework.hateoas.mvc.ControllerLinkBuilder.linkTo
-import org.springframework.hateoas.mvc.ControllerLinkBuilder.methodOn
+import org.springframework.hateoas.Resources
 import org.springframework.http.HttpStatus
 import org.springframework.http.HttpStatus.CONFLICT
 import org.springframework.http.HttpStatus.NOT_FOUND
@@ -26,7 +24,8 @@ import java.util.*
 @RequestMapping("/books")
 class BooksRestController(
     private val commandGateway: CommandGateway,
-    private val queryGateway: QueryGateway
+    private val queryGateway: QueryGateway,
+    private val resourceAssembler: BookResourceAssembler
 ) {
 
     private companion object {
@@ -36,7 +35,7 @@ class BooksRestController(
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    fun post(ucb: UriComponentsBuilder, @RequestBody request: AddBookRequest): ResponseEntity<Void> {
+    fun post(ucb: UriComponentsBuilder, @RequestBody request: AddBookRequest): ResponseEntity<BookResource> {
         val id = commandGateway.sendAndWait<String>(
             AddBookCommand(
                 id = UUID.randomUUID().toString(),
@@ -44,13 +43,14 @@ class BooksRestController(
                 title = request.title
             )
         )
-        return ResponseEntity.created(ucb.path("/books/$id").build().toUri()).build()
+        val book = findById(id)
+        return ResponseEntity.created(ucb.path("/books/$id").build().toUri()).body(book)
     }
 
     @GetMapping
-    fun get(): List<BookResource> {
-        return queryGateway.query(FetchAllBooksQuery, listType).get()
-            .map { toResource(it) }
+    fun get(): Resources<BookResource> {
+        val books = queryGateway.query(FetchAllBooksQuery, listType).get()
+        return Resources(resourceAssembler.toResources(books))
     }
 
     @GetMapping("/{id}")
@@ -58,16 +58,16 @@ class BooksRestController(
         @PathVariable id: String
     ): BookResource {
         val book = queryGateway.query(FindByIdQuery(id), singleType).get()
-            ?: throw AggregateNotFoundException(id, "")
-        return toResource(book)
+            ?: throw AggregateNotFoundException(id, "book with ID [$id] not found")
+        return resourceAssembler.toResource(book)
     }
 
     @PostMapping("/{id}/borrow")
     fun postForIdBorrow(
         @PathVariable id: String,
-        @RequestParam("borrower") borrower: String
+        @RequestBody request: BorrowBookRequest
     ): BookResource {
-        commandGateway.sendAndWait<String>(BorrowBookCommand(id, borrower))
+        commandGateway.sendAndWait<String>(BorrowBookCommand(id, request.borrower))
         return findById(id)
     }
 
@@ -87,17 +87,6 @@ class BooksRestController(
     @ExceptionHandler(IllegalStateException::class)
     fun handle(e: IllegalStateException) {
 
-    }
-
-    private fun toResource(book: Book): BookResource {
-        val resource = BookResource(
-            isbn = book.isbn,
-            title = book.title,
-            borrowed = book.borrowed,
-            borrower = book.borrower
-        )
-        resource.add(linkTo(javaClass, book.id).withSelfRel())
-        return resource
     }
 
 }
